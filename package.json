@@ -1,0 +1,25 @@
+{
+  "name": "hey-boss",
+  "version": "1.0.0",
+  "description": "Phone call input tool for Claude Code",
+  "type": "module",
+  "main": "src/cli.ts",
+  "bin": {
+    "hey-boss": "./src/cli.ts"
+  },
+  "scripts": {
+    "build": "bun build src/cli.ts --outdir dist --target bun",
+    "start": "bun run src/cli.ts",
+    "dev": "bun --watch src/cli.ts",
+    "install:global": "bun link"
+  },
+  "dependencies": {
+    "twilio": "^5.3.5",
+    "openai": "^4.77.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "bun-types": "latest"
+  }
+}
