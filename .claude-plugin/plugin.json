@@ -1,33 +1,28 @@
 {
   "name": "hey-boss",
-  "version": "1.0.0",
-  "description": "Phone call input tool for Claude Code - enables Claude to call you when it needs your input",
-  "author": "Hey Boss Contributors",
-  "license": "MIT",
+  "version": "2.0.0",
+  "description": "Phone call input for Claude Code - Claude calls you when it needs your input",
+  "author": {
+    "name": "ZeframLou",
+    "url": "https://github.com/ZeframLou"
+  },
   "repository": "https://github.com/ZeframLou/hey-boss",
-  "mcp-servers": [
-    {
-      "name": "hey-boss",
-      "path": "./mcp-server/dist/index.js",
-      "transport": "stdio",
+  "license": "MIT",
+  "keywords": ["phone", "voice", "twilio", "mcp", "input"],
+  "skills": "./skills",
+  "mcpServers": {
+    "hey-boss": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.js"],
       "env": {
-        "TWILIO_ACCOUNT_SID": "",
-        "TWILIO_AUTH_TOKEN": "",
-        "TWILIO_PHONE_NUMBER": "",
-        "USER_PHONE_NUMBER": "",
-        "OPENAI_API_KEY": "",
-        "PUBLIC_URL": "",
-        "PORT": "3000"
+        "TWILIO_ACCOUNT_SID": "${TWILIO_ACCOUNT_SID}",
+        "TWILIO_AUTH_TOKEN": "${TWILIO_AUTH_TOKEN}",
+        "TWILIO_PHONE_NUMBER": "${TWILIO_PHONE_NUMBER}",
+        "USER_PHONE_NUMBER": "${USER_PHONE_NUMBER}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "PUBLIC_URL": "${PUBLIC_URL}",
+        "PORT": "${PORT:-3000}"
       }
     }
-  ],
-  "requirements": {
-    "node": ">=18.0.0"
-  },
-  "setup": {
-    "instructions": "See README.md for detailed setup instructions. You'll need Twilio and OpenAI accounts.",
-    "commands": [
-      "cd mcp-server && bun install && bun run build"
-    ]
   }
 }

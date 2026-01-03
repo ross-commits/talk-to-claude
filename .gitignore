@@ -8,7 +8,6 @@ bun.lockb
 .env.*.local
 
 # Build output
-dist/
 *.log
 
 # IDE
