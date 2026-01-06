@@ -168,6 +168,7 @@ export class CallManager {
   private handlePhoneWebhook(req: IncomingMessage, res: ServerResponse): void {
     const contentType = req.headers['content-type'] || '';
 
+    // Telnyx sends JSON webhooks
     if (contentType.includes('application/json')) {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
@@ -184,7 +185,56 @@ export class CallManager {
       return;
     }
 
-    // XML response for media stream connection
+    // Twilio sends form-urlencoded webhooks
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const params = new URLSearchParams(body);
+          await this.handleTwilioWebhook(params, res);
+        } catch (error) {
+          console.error('Error parsing Twilio webhook:', error);
+          res.writeHead(400);
+          res.end('Invalid form data');
+        }
+      });
+      return;
+    }
+
+    // Fallback: Return TwiML for media stream connection
+    const streamUrl = `wss://${new URL(this.config.publicUrl).host}/media-stream`;
+    const xml = this.config.providers.phone.getStreamConnectXml(streamUrl);
+    res.writeHead(200, { 'Content-Type': 'application/xml' });
+    res.end(xml);
+  }
+
+  private async handleTwilioWebhook(params: URLSearchParams, res: ServerResponse): Promise<void> {
+    const callSid = params.get('CallSid');
+    const callStatus = params.get('CallStatus');
+
+    console.error(`Twilio webhook: CallSid=${callSid}, CallStatus=${callStatus}`);
+
+    // Handle call status updates
+    if (callStatus === 'completed' || callStatus === 'busy' || callStatus === 'no-answer' || callStatus === 'failed') {
+      // Call ended - find and mark as hung up
+      if (callSid) {
+        const callId = this.callControlIdToCallId.get(callSid);
+        if (callId) {
+          this.callControlIdToCallId.delete(callSid);
+          const state = this.activeCalls.get(callId);
+          if (state) {
+            state.hungUp = true;
+            state.ws?.close();
+          }
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/xml' });
+      res.end('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+      return;
+    }
+
+    // For 'in-progress' or 'ringing' status, return TwiML to start media stream
     const streamUrl = `wss://${new URL(this.config.publicUrl).host}/media-stream`;
     const xml = this.config.providers.phone.getStreamConnectXml(streamUrl);
     res.writeHead(200, { 'Content-Type': 'application/xml' });
