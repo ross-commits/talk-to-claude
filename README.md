@@ -1,12 +1,15 @@
 # CallMe
 
-**Claude Code plugin for phone calls.**
+**Plugin that lets Claude Code call you on the phone.**
 
-Start a task, walk away. Your phone rings when Claude is done, stuck, or needs a decision.
+Start a task, walk away. Your phone/watch rings when Claude is done, stuck, or needs a decision.
 
-- **Async workflow** — No more babysitting the terminal
-- **Multi-turn conversation** — Talk through decisions naturally
-- **Works anywhere** — Step out for coffee, take a meeting
+<img src="./call-me-comic-min.png" width="600" alt="CallMe comic strip">
+
+- **Minimal plugin** - Does one thing: call you on the phone. No crazy setups.
+- **Multi-turn conversations** — Talk through decisions naturally.
+- **Works anywhere** — Smartphone, smartwatch, or even landline!
+- **Tool-use compatible** - Claude can e.g. do a web search while on a call with you.
 
 ---
 
@@ -29,29 +32,26 @@ Choose **one** of the following:
 1. Create account at [portal.telnyx.com](https://portal.telnyx.com) and verify your identity
 2. [Buy a phone number](https://portal.telnyx.com/#/numbers/buy-numbers) (~$1/month)
 3. [Create a Voice API application](https://portal.telnyx.com/#/call-control/applications):
-   - Set webhook URL to `https://your-ngrok-url/twiml`
-   - Note your **Connection ID** and **API Key**
+   - Set webhook URL to `https://your-ngrok-url/twiml` and API version to v2
+     - You can see your ngrok URL on the ngrok dashboard
+   - Note your **Application ID** and **API Key**
 4. [Verify the phone number](https://portal.telnyx.com/#/numbers/verified-numbers) you want to receive calls at
 
 **Environment variables for Telnyx:**
 ```bash
 CALLME_PHONE_PROVIDER=telnyx
-CALLME_PHONE_ACCOUNT_SID=<Connection ID>
+CALLME_PHONE_ACCOUNT_SID=<Application ID>
 CALLME_PHONE_AUTH_TOKEN=<API Key>
 ```
 
 </details>
 
 <details>
-<summary><b>Option B: Twilio</b></summary>
+<summary><b>Option B: Twilio (Not recommended - need to buy $20 of credits just to start and more expensive overall)</b></summary>
 
 1. Create account at [twilio.com/console](https://www.twilio.com/console)
-2. [Buy a phone number](https://www.twilio.com/console/phone-numbers/incoming) (~$1.15/month)
+2. Use the free number your account comes with or [buy a new phone number](https://www.twilio.com/console/phone-numbers/incoming) (~$1.15/month)
 3. Find your **Account SID** and **Auth Token** on the [Console Dashboard](https://www.twilio.com/console)
-4. Configure your phone number's webhook:
-   - Go to Phone Numbers > Manage > Active Numbers
-   - Click your number
-   - Under "Voice & Fax", set "A Call Comes In" webhook to `https://your-ngrok-url/twiml`
 
 **Environment variables for Twilio:**
 ```bash
