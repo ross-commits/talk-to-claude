@@ -43,8 +43,8 @@ export function loadServerConfig(publicUrl: string): ServerConfig {
   const providerConfig = loadProviderConfig();
   const errors = validateProviderConfig(providerConfig);
 
-  if (!process.env.CALLME_USER_PHONE_NUMBER) {
-    errors.push('Missing CALLME_USER_PHONE_NUMBER (where to call you)');
+  if (!process.env.TTC_USER_PHONE_NUMBER) {
+    errors.push('Missing TTC_USER_PHONE_NUMBER (where to call you)');
   }
 
   if (errors.length > 0) {
@@ -54,13 +54,13 @@ export function loadServerConfig(publicUrl: string): ServerConfig {
   const providers = createProviders(providerConfig);
 
   // Default 3 minutes for transcript timeout
-  const transcriptTimeoutMs = parseInt(process.env.CALLME_TRANSCRIPT_TIMEOUT_MS || '180000', 10);
+  const transcriptTimeoutMs = parseInt(process.env.TTC_TRANSCRIPT_TIMEOUT_MS || '180000', 10);
 
   return {
     publicUrl,
-    port: parseInt(process.env.CALLME_PORT || '3333', 10),
+    port: parseInt(process.env.TTC_PORT || '3333', 10),
     phoneNumber: providerConfig.phoneNumber,
-    userPhoneNumber: process.env.CALLME_USER_PHONE_NUMBER!,
+    userPhoneNumber: process.env.TTC_USER_PHONE_NUMBER!,
     providers,
     providerConfig,
     transcriptTimeoutMs,
@@ -251,7 +251,7 @@ export class CallManager {
               return;
             }
           } else {
-            console.error('[Security] Warning: CALLME_TELNYX_PUBLIC_KEY not set, skipping signature verification');
+            console.error('[Security] Warning: TTC_TELNYX_PUBLIC_KEY not set, skipping signature verification');
           }
 
           const event = JSON.parse(body);

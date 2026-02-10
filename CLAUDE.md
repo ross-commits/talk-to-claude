@@ -50,13 +50,14 @@ server/src/
 - [x] SMS provider (Twilio)
 - [x] Self-hosted TTS provider (OpenAI-compatible API)
 - [x] Self-hosted STT stub
-- [ ] Wire new providers into factory (index.ts)
-- [ ] Update index.ts with SMS MCP tools
-- [ ] Update phone-call.ts env vars (CALLME_ -> TTC_)
+- [x] Wire new providers into factory (index.ts)
+- [x] Update index.ts with SMS MCP tools (send_text)
+- [x] Update all env vars (CALLME_ -> TTC_) in phone-call.ts, ngrok.ts, index.ts
 - [ ] Implement Nova Sonic session (Bedrock bidirectional stream)
 - [ ] Implement self-hosted STT session (WebSocket to faster-whisper)
 - [ ] Add SMS webhook handler (/sms route)
 - [ ] Add @aws-sdk/client-bedrock-runtime dependency
+- [ ] Deploy Kokoro TTS + faster-whisper STT on Spark02
 
 ## Conventions
 
