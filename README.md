@@ -1,230 +1,214 @@
-# CallMe
+# Talk to Claude (TTC)
 
-**Minimal plugin that lets Claude Code call you on the phone.**
+**Voice and text communication with Claude Code -- powered by AWS Nova Sonic.**
 
-Start a task, walk away. Your phone/watch rings when Claude is done, stuck, or needs a decision.
+Call or text Claude from your phone. Start a task, walk away. Your phone rings when Claude is done, stuck, or needs a decision. Text when a call isn't convenient.
 
-<img src="./call-me-comic-min.png" width="800" alt="CallMe comic strip">
+> **Fork of [ZeframLou/call-me](https://github.com/ZeframLou/call-me)** -- the original minimal phone plugin for Claude Code. TTC expands on call-me with AWS Nova Sonic speech-to-speech, SMS/MMS support, and self-hosted STT/TTS options. Huge thanks to [@ZeframLou](https://github.com/ZeframLou) for the original architecture and idea.
 
-- **Minimal plugin** - Does one thing: call you on the phone. No crazy setups.
-- **Multi-turn conversations** - Talk through decisions naturally.
-- **Works anywhere** - Smartphone, smartwatch, or even landline!
-- **Tool-use composable** - Claude can e.g. do a web search while on a call with you.
+---
+
+## What's Different from call-me?
+
+| Feature | call-me | TTC |
+|---------|---------|-----|
+| Voice engine | OpenAI STT + TTS (text pipeline) | **AWS Nova Sonic** (native speech-to-speech) |
+| SMS/texting | No | **Yes** -- same Twilio number |
+| Phone provider | Telnyx (default) or Twilio | **Twilio** (primary) |
+| Self-hosted models | No | **Yes** -- Kokoro TTS, faster-whisper on local GPU |
+| Voice latency | ~1-2s (STT -> text -> TTS) | **~300ms** (Nova Sonic end-to-end) |
+| Barge-in | No | **Yes** -- interrupt Claude mid-sentence |
+| Tool use during speech | No | **Yes** -- Nova Sonic native tool calling |
 
 ---
 
 ## Quick Start
 
-### 1. Get Required Accounts
+### 1. Get Accounts
 
-You'll need:
-- **Phone provider**: [Telnyx](https://telnyx.com) or [Twilio](https://twilio.com)
-- **OpenAI API key**: For speech-to-text and text-to-speech
-- **ngrok account**: Free at [ngrok.com](https://ngrok.com) (for webhook tunneling)
+- **[Twilio](https://twilio.com)** -- phone number for voice + SMS ($1.15/month)
+- **[AWS](https://aws.amazon.com)** -- for Nova Sonic via Bedrock (`aws configure`)
+- **[ngrok](https://ngrok.com)** -- free account for webhook tunneling
 
-### 2. Set Up Phone Provider
+### 2. Set Environment Variables
 
-Choose **one** of the following:
-
-<details>
-<summary><b>Option A: Telnyx (Recommended - 50% cheaper)</b></summary>
-
-1. Create account at [portal.telnyx.com](https://portal.telnyx.com) and verify your identity
-2. [Buy a phone number](https://portal.telnyx.com/#/numbers/buy-numbers) (~$1/month)
-3. [Create a Voice API application](https://portal.telnyx.com/#/call-control/applications):
-   - Set webhook URL to `https://your-ngrok-url/twiml` and API version to v2
-     - You can see your ngrok URL on the ngrok dashboard
-   - Note your **Application ID** and **API Key**
-4. [Verify the phone number](https://portal.telnyx.com/#/numbers/verified-numbers) you want to receive calls at
-5. (Optional but recommended) Get your **Public Key** from Account Settings > Keys & Credentials for webhook signature verification
-
-**Environment variables for Telnyx:**
-```bash
-CALLME_PHONE_PROVIDER=telnyx
-CALLME_PHONE_ACCOUNT_SID=<Application ID>
-CALLME_PHONE_AUTH_TOKEN=<API Key>
-CALLME_TELNYX_PUBLIC_KEY=<Public Key>  # Optional: enables webhook security
-```
-
-</details>
-
-<details>
-<summary><b>Option B: Twilio (Not recommended - need to buy $20 of credits just to start and more expensive overall)</b></summary>
-
-1. Create account at [twilio.com/console](https://www.twilio.com/console)
-2. Use the free number your account comes with or [buy a new phone number](https://www.twilio.com/console/phone-numbers/incoming) (~$1.15/month)
-3. Find your **Account SID** and **Auth Token** on the [Console Dashboard](https://www.twilio.com/console)
-
-**Environment variables for Twilio:**
-```bash
-CALLME_PHONE_PROVIDER=twilio
-CALLME_PHONE_ACCOUNT_SID=<Account SID>
-CALLME_PHONE_AUTH_TOKEN=<Auth Token>
-```
-
-</details>
-
-### 3. Set Environment Variables
-
-Add these to `~/.claude/settings.json` (recommended) or export them in your shell:
+Add to `~/.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "CALLME_PHONE_PROVIDER": "telnyx",
-    "CALLME_PHONE_ACCOUNT_SID": "your-connection-id-or-account-sid",
-    "CALLME_PHONE_AUTH_TOKEN": "your-api-key-or-auth-token",
-    "CALLME_PHONE_NUMBER": "+15551234567",
-    "CALLME_USER_PHONE_NUMBER": "+15559876543",
-    "CALLME_OPENAI_API_KEY": "sk-...",
-    "CALLME_NGROK_AUTHTOKEN": "your-ngrok-token"
+    "TTC_PHONE_PROVIDER": "twilio",
+    "TTC_PHONE_ACCOUNT_SID": "your-account-sid",
+    "TTC_PHONE_AUTH_TOKEN": "your-auth-token",
+    "TTC_PHONE_NUMBER": "+15551234567",
+    "TTC_USER_PHONE_NUMBER": "+15559876543",
+    "TTC_VOICE_BACKEND": "nova-sonic",
+    "TTC_AWS_REGION": "us-east-1",
+    "TTC_NGROK_AUTHTOKEN": "your-ngrok-token"
   }
 }
 ```
 
-#### Required Variables
-
-| Variable | Description |
-|----------|-------------|
-| `CALLME_PHONE_PROVIDER` | `telnyx` (default) or `twilio` |
-| `CALLME_PHONE_ACCOUNT_SID` | Telnyx Connection ID or Twilio Account SID |
-| `CALLME_PHONE_AUTH_TOKEN` | Telnyx API Key or Twilio Auth Token |
-| `CALLME_PHONE_NUMBER` | Phone number Claude calls from (E.164 format) |
-| `CALLME_USER_PHONE_NUMBER` | Your phone number to receive calls |
-| `CALLME_OPENAI_API_KEY` | OpenAI API key (for TTS and realtime STT) |
-| `CALLME_NGROK_AUTHTOKEN` | ngrok auth token for webhook tunneling |
-
-#### Optional Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CALLME_TTS_VOICE` | `onyx` | OpenAI voice: alloy, echo, fable, onyx, nova, shimmer |
-| `CALLME_PORT` | `3333` | Local HTTP server port |
-| `CALLME_NGROK_DOMAIN` | - | Custom ngrok domain (paid feature) |
-| `CALLME_TRANSCRIPT_TIMEOUT_MS` | `180000` | Timeout for user speech (3 minutes) |
-| `CALLME_STT_SILENCE_DURATION_MS` | `800` | Silence duration to detect end of speech |
-| `CALLME_TELNYX_PUBLIC_KEY` | - | Telnyx public key for webhook signature verification (recommended) |
-
-### 4. Install Plugin
+### 3. Install Plugin
 
 ```bash
-/plugin marketplace add ZeframLou/call-me
-/plugin install callme@callme
+/plugin marketplace add ross-commits/talk-to-claude
+/plugin install ttc@ttc
 ```
 
 Restart Claude Code. Done!
 
 ---
 
-## How It Works
+## Voice Backends
 
-```
-Claude Code                    CallMe MCP Server (local)
-    │                                    │
-    │  "I finished the feature..."       │
-    ▼                                    ▼
-Plugin ────stdio──────────────────► MCP Server
-                                         │
-                                         ├─► ngrok tunnel
-                                         │
-                                         ▼
-                                   Phone Provider (Telnyx/Twilio)
-                                         │
-                                         ▼
-                                   Your Phone rings
-                                   You speak
-                                   Text returns to Claude
+### AWS Nova Sonic (Default -- Recommended)
+
+Native speech-to-speech via Amazon Bedrock. No separate STT/TTS pipeline -- the model understands and generates speech directly. Supports barge-in, tool use mid-conversation, and voice activity detection.
+
+```bash
+TTC_VOICE_BACKEND=nova-sonic
+TTC_AWS_REGION=us-east-1
+TTC_NOVA_SONIC_MODEL=amazon.nova-sonic-v1:0
+TTC_NOVA_SONIC_VOICE=tiffany
 ```
 
-The MCP server runs locally and automatically creates an ngrok tunnel for phone provider webhooks.
+Requires AWS credentials (`aws configure` or env vars). Available in us-east-1, us-west-2, ap-northeast-1, eu-north-1.
+
+### OpenAI (Fallback)
+
+The original call-me approach: OpenAI Realtime STT + TTS. Higher latency but works well.
+
+```bash
+TTC_VOICE_BACKEND=openai
+TTC_OPENAI_API_KEY=sk-...
+TTC_TTS_VOICE=onyx
+```
+
+### Self-Hosted (Local GPU)
+
+Run STT and TTS on your own hardware. Great for privacy, zero API costs, and tinkering.
+
+```bash
+TTC_VOICE_BACKEND=self-hosted
+TTC_SELF_HOSTED_STT_URL=http://192.168.3.20:8000   # faster-whisper-server
+TTC_SELF_HOSTED_TTS_URL=http://192.168.3.20:8001   # Kokoro TTS
+```
+
+**Recommended models:**
+- **STT**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) large-v3 (INT8) -- ~200ms latency, ~3-4GB VRAM
+- **TTS**: [Kokoro](https://github.com/remsky/Kokoro-FastAPI) (82M params) -- ~30-100ms TTFA, ~1GB VRAM
 
 ---
 
 ## Tools
 
-### `initiate_call`
-Start a phone call.
+### Voice
 
-```typescript
-const { callId, response } = await initiate_call({
-  message: "Hey! I finished the auth system. What should I work on next?"
-});
+| Tool | Description |
+|------|-------------|
+| `initiate_call` | Start a phone call with the user |
+| `continue_call` | Continue an active call with a follow-up |
+| `speak_to_user` | Speak without waiting for response (acknowledgments) |
+| `end_call` | End the call with a closing message |
+
+### Text (Coming Soon)
+
+| Tool | Description |
+|------|-------------|
+| `send_text` | Send an SMS/MMS to the user |
+| `check_texts` | Check for incoming text messages |
+
+---
+
+## Architecture
+
 ```
-
-### `continue_call`
-Continue with follow-up questions.
-
-```typescript
-const response = await continue_call({
-  call_id: callId,
-  message: "Got it. Should I add rate limiting too?"
-});
-```
-
-### `speak_to_user`
-Speak to the user without waiting for a response. Useful for acknowledging requests before time-consuming operations.
-
-```typescript
-await speak_to_user({
-  call_id: callId,
-  message: "Let me search for that information. Give me a moment..."
-});
-// Continue with your long-running task
-const results = await performSearch();
-// Then continue the conversation
-const response = await continue_call({
-  call_id: callId,
-  message: `I found ${results.length} results...`
-});
-```
-
-### `end_call`
-End the call.
-
-```typescript
-await end_call({
-  call_id: callId,
-  message: "Perfect, I'll get started. Talk soon!"
-});
+Claude Code                    TTC MCP Server (local)
+    |                                    |
+    |  "I finished the feature..."       |
+    v                                    v
+Plugin ----stdio----------------> MCP Server
+                                         |
+                                    +---------+
+                                    |         |
+                                    v         v
+                               Voice Path  Text Path
+                                    |         |
+                                    v         v
+                              Nova Sonic   Twilio SMS
+                              (Bedrock)    REST API
+                                    |         |
+                                    v         v
+                              Twilio Media  Your Phone
+                              Stream (WS)   receives SMS
+                                    |
+                                    v
+                              Your Phone rings
+                              You speak
+                              Text returns to Claude
 ```
 
 ---
 
 ## Costs
 
-| Service | Telnyx | Twilio |
-|---------|--------|--------|
-| Outbound calls | ~$0.007/min | ~$0.014/min |
-| Phone number | ~$1/month | ~$1.15/month |
+| Service | Cost |
+|---------|------|
+| Twilio outbound calls | ~$0.014/min |
+| Twilio phone number | ~$1.15/month |
+| Twilio SMS (outbound) | ~$0.0079/segment |
+| Nova Sonic (Bedrock) | ~$0.0017/sec input, ~$0.007/sec output |
+| OpenAI STT+TTS (if used) | ~$0.03/min |
 
-Plus OpenAI costs (same for both providers):
-- **Speech-to-text**: ~$0.006/min (Whisper)
-- **Text-to-speech**: ~$0.02/min (TTS)
-
-**Total**: ~$0.03-0.04/minute of conversation
+**Typical voice call**: ~$0.04-0.06/minute
 
 ---
 
-## Troubleshooting
+## Environment Variables
 
-### Claude doesn't use the tool
-1. Check all required environment variables are set (ideally in `~/.claude/settings.json`)
-2. Restart Claude Code after installing the plugin
-3. Try explicitly: "Call me to discuss the next steps when you're done."
+### Required
 
-### Call doesn't connect
-1. Check the MCP server logs (stderr) with `claude --debug`
-2. Verify your phone provider credentials are correct
-3. Make sure ngrok can create a tunnel
+| Variable | Description |
+|----------|-------------|
+| `TTC_PHONE_PROVIDER` | `twilio` |
+| `TTC_PHONE_ACCOUNT_SID` | Twilio Account SID |
+| `TTC_PHONE_AUTH_TOKEN` | Twilio Auth Token |
+| `TTC_PHONE_NUMBER` | Phone number Claude calls from (E.164) |
+| `TTC_USER_PHONE_NUMBER` | Your phone number to receive calls |
+| `TTC_VOICE_BACKEND` | `nova-sonic`, `openai`, or `self-hosted` |
+| `TTC_NGROK_AUTHTOKEN` | ngrok auth token |
 
-### Audio issues
-1. Ensure your phone number is verified with your provider
-2. Check that the webhook URL in your provider dashboard matches your ngrok URL
+### Nova Sonic
 
-### ngrok errors
-1. Verify your `CALLME_NGROK_AUTHTOKEN` is correct
-2. Check if you've hit ngrok's free tier limits
-3. Try a different port with `CALLME_PORT=3334`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTC_AWS_REGION` | `us-east-1` | AWS region for Bedrock |
+| `TTC_NOVA_SONIC_MODEL` | `amazon.nova-sonic-v1:0` | Model ID |
+| `TTC_NOVA_SONIC_VOICE` | `tiffany` | Voice ID |
+
+### OpenAI (if using openai backend)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTC_OPENAI_API_KEY` | - | OpenAI API key |
+| `TTC_TTS_VOICE` | `onyx` | TTS voice |
+
+### Self-Hosted (if using self-hosted backend)
+
+| Variable | Description |
+|----------|-------------|
+| `TTC_SELF_HOSTED_STT_URL` | URL of faster-whisper server |
+| `TTC_SELF_HOSTED_TTS_URL` | URL of Kokoro/MeloTTS server |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTC_PORT` | `3333` | Local HTTP server port |
+| `TTC_NGROK_DOMAIN` | - | Custom ngrok domain (paid) |
+| `TTC_TRANSCRIPT_TIMEOUT_MS` | `180000` | Timeout for user speech |
+| `TTC_STT_SILENCE_DURATION_MS` | `800` | Silence duration for end-of-speech |
 
 ---
 
@@ -237,6 +221,10 @@ bun run dev
 ```
 
 ---
+
+## Credits
+
+This project is a fork of **[call-me](https://github.com/ZeframLou/call-me)** by [@ZeframLou](https://github.com/ZeframLou). The original project created the brilliant idea of giving Claude Code a phone -- we're building on that foundation with AWS-native voice, SMS support, and self-hosted model options.
 
 ## License
 

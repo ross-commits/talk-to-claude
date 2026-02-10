@@ -1,11 +1,11 @@
 {
-  "name": "callme",
+  "name": "ttc",
   "owner": {
-    "name": "ZeframLou"
+    "name": "ross-commits"
   },
   "plugins": [
     {
-      "name": "callme",
+      "name": "ttc",
       "source": "./"
     }
   ]

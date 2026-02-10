@@ -1,30 +1,38 @@
 {
-  "name": "callme",
-  "version": "1.0.2",
-  "description": "Claude calls you on the phone when it needs your input or wants to report progress",
+  "name": "ttc",
+  "version": "0.1.0",
+  "description": "Talk to Claude - Voice calls and texts powered by AWS Nova Sonic and Twilio",
   "author": {
-    "name": "ZeframLou",
-    "url": "https://github.com/ZeframLou"
+    "name": "ross-commits",
+    "url": "https://github.com/ross-commits"
   },
-  "repository": "https://github.com/ZeframLou/call-me",
+  "repository": "https://github.com/ross-commits/talk-to-claude",
   "license": "MIT",
-  "keywords": ["phone", "voice", "calls", "input"],
+  "keywords": ["phone", "voice", "calls", "sms", "texting", "nova-sonic", "aws", "bedrock", "twilio"],
   "skills": "./skills",
   "mcpServers": {
-    "callme": {
+    "ttc": {
       "command": "bun",
       "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}/server", "start"],
       "env": {
-        "CALLME_PHONE_ACCOUNT_SID": "${CALLME_PHONE_ACCOUNT_SID}",
-        "CALLME_PHONE_AUTH_TOKEN": "${CALLME_PHONE_AUTH_TOKEN}",
-        "CALLME_PHONE_NUMBER": "${CALLME_PHONE_NUMBER}",
-        "CALLME_USER_PHONE_NUMBER": "${CALLME_USER_PHONE_NUMBER}",
-        "CALLME_OPENAI_API_KEY": "${CALLME_OPENAI_API_KEY}",
-        "CALLME_TTS_VOICE": "${CALLME_TTS_VOICE:-onyx}",
-        "CALLME_NGROK_AUTHTOKEN": "${CALLME_NGROK_AUTHTOKEN}",
-        "CALLME_PORT": "${CALLME_PORT:-3333}",
-        "CALLME_TRANSCRIPT_TIMEOUT_MS": "${CALLME_TRANSCRIPT_TIMEOUT_MS:-180000}",
-        "CALLME_STT_SILENCE_DURATION_MS": "${CALLME_STT_SILENCE_DURATION_MS:-800}"
+        "TTC_PHONE_PROVIDER": "${TTC_PHONE_PROVIDER:-twilio}",
+        "TTC_PHONE_ACCOUNT_SID": "${TTC_PHONE_ACCOUNT_SID}",
+        "TTC_PHONE_AUTH_TOKEN": "${TTC_PHONE_AUTH_TOKEN}",
+        "TTC_PHONE_NUMBER": "${TTC_PHONE_NUMBER}",
+        "TTC_USER_PHONE_NUMBER": "${TTC_USER_PHONE_NUMBER}",
+        "TTC_VOICE_BACKEND": "${TTC_VOICE_BACKEND:-nova-sonic}",
+        "TTC_AWS_REGION": "${TTC_AWS_REGION:-us-east-1}",
+        "TTC_NOVA_SONIC_MODEL": "${TTC_NOVA_SONIC_MODEL:-amazon.nova-sonic-v1:0}",
+        "TTC_NOVA_SONIC_VOICE": "${TTC_NOVA_SONIC_VOICE:-tiffany}",
+        "TTC_OPENAI_API_KEY": "${TTC_OPENAI_API_KEY}",
+        "TTC_TTS_VOICE": "${TTC_TTS_VOICE:-onyx}",
+        "TTC_NGROK_AUTHTOKEN": "${TTC_NGROK_AUTHTOKEN}",
+        "TTC_NGROK_DOMAIN": "${TTC_NGROK_DOMAIN}",
+        "TTC_PORT": "${TTC_PORT:-3333}",
+        "TTC_TRANSCRIPT_TIMEOUT_MS": "${TTC_TRANSCRIPT_TIMEOUT_MS:-180000}",
+        "TTC_STT_SILENCE_DURATION_MS": "${TTC_STT_SILENCE_DURATION_MS:-800}",
+        "TTC_SELF_HOSTED_STT_URL": "${TTC_SELF_HOSTED_STT_URL}",
+        "TTC_SELF_HOSTED_TTS_URL": "${TTC_SELF_HOSTED_TTS_URL}"
       }
     }
   },
@@ -34,7 +42,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "SILENTLY evaluate if you should call the user. ONLY use initiate_call if you completed significant work and need to discuss next steps, or are genuinely blocked. Do NOT output any text - either call or do nothing."
+            "prompt": "SILENTLY evaluate if you should contact the user. ONLY use initiate_call if you completed significant work and need to discuss next steps, or are genuinely blocked. Consider send_text for quick updates that don't need a voice conversation. Do NOT output any text - either call, text, or do nothing."
           }
         ]
       }

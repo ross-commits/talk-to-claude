@@ -1,7 +1,7 @@
 {
-  "name": "callme-mcp",
-  "version": "1.0.2",
-  "description": "MCP server that lets Claude call you on the phone",
+  "name": "talk-to-claude",
+  "version": "0.1.0",
+  "description": "Talk to Claude - Voice and text communication powered by AWS Nova Sonic",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
