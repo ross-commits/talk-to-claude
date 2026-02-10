@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars (it's in .gitignore)
+
+# Your existing VPC with site-to-site VPN
+vpc_id             = "vpc-xxxxxxxxxxxxxxxxx"
+private_subnet_ids = ["subnet-xxxxxxxxxxxxxxxxx", "subnet-xxxxxxxxxxxxxxxxx"]
+
+# On-prem server running the TTC MCP server (reachable via VPN)
+onprem_server_ip   = "192.168.x.x"
+onprem_server_port = 3333

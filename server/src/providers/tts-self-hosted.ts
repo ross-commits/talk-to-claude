@@ -24,7 +24,7 @@
 import type { TTSProvider, TTSConfig } from './types.js';
 
 export interface SelfHostedTTSConfig extends TTSConfig {
-  /** Base URL of the TTS server (e.g., http://192.168.3.20:8001) */
+  /** Base URL of the TTS server (e.g., http://your-gpu-server:8001) */
   serverUrl: string;
 }
 

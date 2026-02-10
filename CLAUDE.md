@@ -39,9 +39,13 @@ server/src/
 
 ## Lab Infrastructure
 
+- **Yori** (192.168.3.100): Ubuntu 24.04, RTX 4070 Super 12GB, 64GB RAM, x86_64
+  - Runs: faster-whisper STT (port 8000), Kokoro TTS (port 8001) via Docker GPU
+- **Vlad** (192.168.3.30): Ubuntu 24.04, no GPU, 64GB RAM, i7-8700B
+  - Runs: infra stack (Grafana, Prometheus, LiteLLM, Open WebUI, n8n, Caddy)
 - **Spark01** (192.168.3.20): NVIDIA DGX Spark, GB10, 128GB unified RAM, aarch64
-- **Spark02** (192.168.3.21): Same specs, more disk space (2TB free)
-- Both run Ollama and can host STT/TTS models via Docker or direct install
+- **Spark02** (192.168.3.21): Same as Spark01, backup faster-whisper instance
+- **AWS** (us-east-1): VPC 10.100.0.0/16, site-to-site VPN, Bedrock VPC endpoints
 
 ## Implementation Status
 
@@ -57,7 +61,7 @@ server/src/
 - [ ] Implement self-hosted STT session (WebSocket to faster-whisper)
 - [ ] Add SMS webhook handler (/sms route)
 - [ ] Add @aws-sdk/client-bedrock-runtime dependency
-- [ ] Deploy Kokoro TTS + faster-whisper STT on Spark02
+- [x] Deploy Kokoro TTS + faster-whisper STT on Yori (RTX 4070 Super)
 
 ## Conventions
 

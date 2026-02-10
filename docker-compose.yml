@@ -1,0 +1,17 @@
+services:
+  ttc:
+    build: .
+    container_name: ttc-server
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+    env_file:
+      - .env
+    # For MCP stdio mode, this runs as a long-lived server.
+    # The ngrok tunnel and HTTP webhook server start automatically.
+    # Logs go to stderr (stdout is reserved for MCP protocol).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

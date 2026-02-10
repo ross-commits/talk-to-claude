@@ -25,7 +25,7 @@ import WebSocket from 'ws';
 import type { RealtimeSTTProvider, RealtimeSTTSession, STTConfig } from './types.js';
 
 export interface SelfHostedSTTConfig extends STTConfig {
-  /** Base URL of the STT server (e.g., http://192.168.3.20:8000) */
+  /** Base URL of the STT server (e.g., http://your-gpu-server:8000) */
   serverUrl: string;
 }
 

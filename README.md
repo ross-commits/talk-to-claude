@@ -91,8 +91,8 @@ Run STT and TTS on your own hardware. Great for privacy, zero API costs, and tin
 
 ```bash
 TTC_VOICE_BACKEND=self-hosted
-TTC_SELF_HOSTED_STT_URL=http://192.168.3.20:8000   # faster-whisper-server
-TTC_SELF_HOSTED_TTS_URL=http://192.168.3.20:8001   # Kokoro TTS
+TTC_SELF_HOSTED_STT_URL=http://your-gpu-server:8000   # faster-whisper-server
+TTC_SELF_HOSTED_TTS_URL=http://your-gpu-server:8001   # Kokoro TTS
 ```
 
 **Recommended models:**
