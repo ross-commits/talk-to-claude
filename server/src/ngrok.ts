@@ -39,7 +39,9 @@ async function doStartNgrok(port: number): Promise<string> {
     authtoken,
     // Use custom domain if configured (paid ngrok feature)
     domain: process.env.TTC_NGROK_DOMAIN || undefined,
-  });
+    // Enable pooling to avoid "endpoint already online" errors from stale sessions
+    pooling: 'tls',
+  } as any);
 
   const url = listener.url();
   if (!url) {

@@ -7,9 +7,18 @@ services:
       - "3333:3333"
     env_file:
       - .env
-    # For MCP stdio mode, this runs as a long-lived server.
-    # The ngrok tunnel and HTTP webhook server start automatically.
-    # Logs go to stderr (stdout is reserved for MCP protocol).
+    environment:
+      # Pass AWS credentials for Nova Sonic (Bedrock).
+      # These come from the host environment or .env file.
+      # If using IAM roles / instance profiles, these can be omitted.
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    volumes:
+      # Mount host AWS config for SSO / named profiles.
+      # Comment out if you use env var credentials instead:
+      - ${HOME}/.aws:/root/.aws:ro
     logging:
       driver: json-file
       options:

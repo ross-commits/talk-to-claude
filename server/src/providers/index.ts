@@ -75,8 +75,8 @@ export function loadProviderConfig(): ProviderConfig {
     sttModel: process.env.TTC_STT_MODEL || 'gpt-4o-transcribe',
     sttSilenceDurationMs,
     awsRegion: process.env.TTC_AWS_REGION || 'us-east-1',
-    novaSonicModel: process.env.TTC_NOVA_SONIC_MODEL || 'amazon.nova-sonic-v1:0',
-    novaSonicVoice: process.env.TTC_NOVA_SONIC_VOICE || 'tiffany',
+    novaSonicModel: process.env.TTC_NOVA_SONIC_MODEL || 'amazon.nova-2-sonic-v1:0',
+    novaSonicVoice: process.env.TTC_NOVA_SONIC_VOICE || 'matthew',
     selfHostedSttUrl: process.env.TTC_SELF_HOSTED_STT_URL,
     selfHostedTtsUrl: process.env.TTC_SELF_HOSTED_TTS_URL,
   };
@@ -101,6 +101,17 @@ export function createPhoneProvider(config: ProviderConfig): PhoneProvider {
 }
 
 export function createTTSProvider(config: ProviderConfig): TTSProvider {
+  if (config.voiceBackend === 'nova-sonic') {
+    // Nova Sonic handles TTS internally via bidirectional stream.
+    // Return a stub provider — the CallManager bypasses it entirely
+    // when using Nova Sonic, but the ProviderRegistry type requires one.
+    return {
+      name: 'nova-sonic (native)',
+      initialize() {},
+      async synthesize() { return Buffer.alloc(0); },
+    } as TTSProvider;
+  }
+
   if (config.voiceBackend === 'self-hosted') {
     const provider = new SelfHostedTTSProvider();
     provider.initialize({
@@ -111,8 +122,7 @@ export function createTTSProvider(config: ProviderConfig): TTSProvider {
     return provider;
   }
 
-  // OpenAI TTS (also used as fallback when nova-sonic is selected,
-  // since Nova Sonic handles TTS internally via bidirectional stream)
+  // OpenAI TTS
   const provider = new OpenAITTSProvider();
   provider.initialize({
     apiKey: config.openaiApiKey,
@@ -122,6 +132,17 @@ export function createTTSProvider(config: ProviderConfig): TTSProvider {
 }
 
 export function createSTTProvider(config: ProviderConfig): RealtimeSTTProvider {
+  if (config.voiceBackend === 'nova-sonic') {
+    // Nova Sonic handles STT internally via bidirectional stream.
+    // Return a stub provider — the CallManager bypasses it entirely
+    // when using Nova Sonic, but the ProviderRegistry type requires one.
+    return {
+      name: 'nova-sonic (native)',
+      initialize() {},
+      createSession() { throw new Error('Nova Sonic handles STT natively'); },
+    } as RealtimeSTTProvider;
+  }
+
   if (config.voiceBackend === 'self-hosted') {
     const provider = new SelfHostedSTTProvider();
     provider.initialize({
@@ -131,8 +152,7 @@ export function createSTTProvider(config: ProviderConfig): RealtimeSTTProvider {
     return provider;
   }
 
-  // OpenAI Realtime STT (also used as fallback when nova-sonic is selected,
-  // since Nova Sonic handles STT internally via bidirectional stream)
+  // OpenAI Realtime STT
   const provider = new OpenAIRealtimeSTTProvider();
   provider.initialize({
     apiKey: config.openaiApiKey,

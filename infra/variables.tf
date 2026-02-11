@@ -39,6 +39,26 @@ variable "onprem_server_port" {
   default     = 3333
 }
 
+# --- ALB for WebSocket (optional — replaces ngrok) ---
+
+variable "enable_alb" {
+  description = "Create an internet-facing ALB for Twilio WebSocket media streams (replaces ngrok)"
+  type        = bool
+  default     = false
+}
+
+variable "public_subnet_ids" {
+  description = "IDs of public subnets with IGW (required when enable_alb = true, at least 2 AZs)"
+  type        = list(string)
+  default     = []
+}
+
+variable "acm_certificate_arn" {
+  description = "ARN of ACM certificate for HTTPS on ALB (required when enable_alb = true)"
+  type        = string
+  default     = ""
+}
+
 # --- Optional ---
 
 variable "log_retention_days" {

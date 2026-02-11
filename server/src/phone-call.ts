@@ -14,6 +14,13 @@ import {
   generateWebSocketToken,
   validateWebSocketToken,
 } from './webhook-security.js';
+import {
+  NovaSonicProvider,
+  NovaSonicAudio,
+  type NovaSonicSession,
+} from './providers/voice-nova-sonic.js';
+import { ClaudeBrain, type ClaudeResponse } from './claude-brain.js';
+import { CALL_TOOL_CONFIG, executeTool } from './tools.js';
 
 interface CallState {
   callId: string;
@@ -27,19 +34,33 @@ interface CallState {
   startTime: number;
   hungUp: boolean;
   sttSession: RealtimeSTTSession | null;
+
+  // Nova Sonic mode: full-duplex audio bridge (replaces separate STT+TTS)
+  novaSonicSession: NovaSonicSession | null;
+  novaSonicTranscript: string;        // Accumulated user transcript from current turn
+  novaSonicTurnResolve: ((transcript: string) => void) | null;  // Resolve for waiting on turn
+  novaSonicAssistantText: string;     // Accumulated assistant transcript
+
+  // Claude Brain mode: Claude Sonnet handles conversation, legacy STT+TTS handles audio
+  claudeBrain: ClaudeBrain | null;
+  conversationLoopRunning: boolean;   // True while background conversation loop is active
 }
 
 export interface ServerConfig {
   publicUrl: string;
+  wsUrl: string;  // WebSocket-capable URL for Twilio media streams (may differ from publicUrl)
   port: number;
   phoneNumber: string;
   userPhoneNumber: string;
   providers: ProviderRegistry;
   providerConfig: ProviderConfig;  // For webhook signature verification
   transcriptTimeoutMs: number;
+  usingNgrok: boolean;  // Whether ngrok is handling traffic (skip webhook signature validation)
+  claudeModel: string;  // Bedrock model ID for Claude brain (e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0)
+  claudeRegion: string; // AWS region for Bedrock Converse API
 }
 
-export function loadServerConfig(publicUrl: string): ServerConfig {
+export function loadServerConfig(publicUrl: string, wsUrl?: string, usingNgrok = false): ServerConfig {
   const providerConfig = loadProviderConfig();
   const errors = validateProviderConfig(providerConfig);
 
@@ -58,12 +79,16 @@ export function loadServerConfig(publicUrl: string): ServerConfig {
 
   return {
     publicUrl,
+    wsUrl: wsUrl || publicUrl,
     port: parseInt(process.env.TTC_PORT || '3333', 10),
     phoneNumber: providerConfig.phoneNumber,
     userPhoneNumber: process.env.TTC_USER_PHONE_NUMBER!,
     providers,
     providerConfig,
     transcriptTimeoutMs,
+    usingNgrok,
+    claudeModel: process.env.TTC_CLAUDE_MODEL || 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+    claudeRegion: providerConfig.awsRegion || 'us-east-1',
   };
 }
 
@@ -76,8 +101,25 @@ export class CallManager {
   private config: ServerConfig;
   private currentCallId = 0;
 
+  // Nova Sonic provider (initialized once, shared across calls)
+  private novaSonicProvider: NovaSonicProvider | null = null;
+
   constructor(config: ServerConfig) {
     this.config = config;
+
+    // Initialize Nova Sonic provider if that's our voice backend
+    if (config.providerConfig.voiceBackend === 'nova-sonic') {
+      this.novaSonicProvider = new NovaSonicProvider();
+      this.novaSonicProvider.initialize({
+        region: config.providerConfig.awsRegion || 'us-east-1',
+        modelId: config.providerConfig.novaSonicModel || 'amazon.nova-sonic-v1:0',
+        voiceId: config.providerConfig.novaSonicVoice || 'tiffany',
+      });
+    }
+  }
+
+  private get isNovaSonicMode(): boolean {
+    return this.novaSonicProvider !== null;
   }
 
   startServer(): void {
@@ -119,9 +161,10 @@ export class CallManager {
           }
           console.error(`[Security] WebSocket token validated for call ${callId}`);
         } else if (!callId) {
-          // Token missing or not found - only allow fallback for ngrok free tier
-          const isNgrokFreeTier = new URL(this.config.publicUrl).hostname.endsWith('.ngrok-free.dev');
-          if (isNgrokFreeTier) {
+          // Token missing or not found - allow fallback when using ngrok for WebSocket
+          const wsHost = new URL(this.config.wsUrl).hostname;
+          const isNgrokWs = wsHost.endsWith('.ngrok-free.dev') || wsHost.endsWith('.ngrok.io');
+          if (isNgrokWs) {
             // Fallback: find the most recent active call (ngrok compatibility mode)
             // Token lookup can fail due to timing issues with ngrok's free tier
             const activeCallIds = Array.from(this.activeCalls.keys());
@@ -184,12 +227,19 @@ export class CallManager {
           } catch { }
         }
 
-        // Forward audio to realtime transcription session
+        // Route audio to the appropriate backend
         const audioState = this.activeCalls.get(callId);
-        if (audioState?.sttSession) {
+        if (audioState) {
           const audioData = this.extractInboundAudio(msgBuffer);
           if (audioData) {
-            audioState.sttSession.sendAudio(audioData);
+            if (audioState.novaSonicSession) {
+              // Nova Sonic mode: convert mu-law 8kHz -> PCM 16kHz and forward
+              const pcm16k = NovaSonicAudio.mulawToNovaSonicPCM(audioData);
+              audioState.novaSonicSession.sendAudio(pcm16k);
+            } else if (audioState.sttSession) {
+              // Legacy STT mode: forward raw mu-law to STT provider
+              audioState.sttSession.sendAudio(audioData);
+            }
           }
         }
       });
@@ -280,12 +330,15 @@ export class CallManager {
           // because ngrok doesn't preserve headers exactly as Twilio sends them
           const webhookUrl = `${this.config.publicUrl}/twiml`;
 
+          // Skip signature validation when behind a proxy or ngrok tunnel:
+          // - Proxy (API Gateway, CloudFront): Twilio signs against proxy URL but
+          //   headers/body may be transformed, causing mismatches
+          // - ngrok: URL encoding/header differences cause signature mismatches;
+          //   ngrok auth token provides the security boundary
+          const skipValidation = this.config.usingNgrok || (this.config.publicUrl !== this.config.wsUrl);
           if (!validateTwilioSignature(authToken, signature, webhookUrl, params)) {
-            const isNgrokFreeTier = new URL(this.config.publicUrl).hostname.endsWith('.ngrok-free.dev');
-            if (isNgrokFreeTier) {
-              // Only log if ngrok free tier is used
-              // Log for debugging but proceed anyway - ngrok free tier causes signature mismatches
-              console.error('[Security] Twilio signature validation failed (proceeding anyway for ngrok compatibility)');
+            if (skipValidation) {
+              console.error('[Security] Twilio signature validation failed (proceeding — behind proxy/ngrok)');
             } else {
               console.error('[Security] Rejecting Twilio webhook: invalid signature');
               res.writeHead(401);
@@ -337,7 +390,8 @@ export class CallManager {
 
     // For 'in-progress' or 'ringing' status, return TwiML to start media stream
     // Include security token in the stream URL
-    let streamUrl = `wss://${new URL(this.config.publicUrl).host}/media-stream`;
+    // Use wsUrl (not publicUrl) since API Gateway HTTP API doesn't support WebSocket
+    let streamUrl = `wss://${new URL(this.config.wsUrl).host}/media-stream`;
 
     // Find the call state to get the WebSocket token
     if (callSid) {
@@ -374,7 +428,8 @@ export class CallManager {
 
         case 'call.answered':
           // Include security token in the stream URL
-          let streamUrl = `wss://${new URL(this.config.publicUrl).host}/media-stream`;
+          // Use wsUrl (not publicUrl) since API Gateway HTTP API doesn't support WebSocket
+          let streamUrl = `wss://${new URL(this.config.wsUrl).host}/media-stream`;
           const callId = this.callControlIdToCallId.get(callControlId);
           if (callId) {
             const state = this.activeCalls.get(callId);
@@ -422,13 +477,146 @@ export class CallManager {
     }
   }
 
+  // ===========================================================================
+  // Nova Sonic session setup + turn waiting
+  // ===========================================================================
+
+  /**
+   * Create and wire up a Nova Sonic session for a call.
+   *
+   * Nova Sonic is the voice agent — handles conversation, tool calling, and speech natively.
+   * Claude Code injects messages via sendText() and reads user responses via transcript callbacks.
+   *
+   * Hooks: audio output -> Twilio, text output -> transcript accumulation,
+   * tool use -> executeTool -> sendToolResult, barge-in -> clear outbound audio.
+   */
+  private async setupNovaSonicSession(state: CallState, initialMessage?: string): Promise<void> {
+    if (!this.novaSonicProvider) throw new Error('Nova Sonic provider not initialized');
+
+    const systemPrompt =
+      'You are a voice assistant on a phone call initiated by Claude Code (an AI coding assistant). ' +
+      'You have access to tools for checking system metrics, running commands, managing Docker containers, ' +
+      'and checking service health on configured infrastructure hosts. ' +
+      'Use your tools proactively when the user asks about infrastructure. ' +
+      'Keep responses concise and conversational — this is a voice call. ' +
+      (initialMessage
+        ? `\n\nClaude Code initiated this call with the following message: "${initialMessage}". ` +
+          'Deliver this message naturally when the call begins, then continue the conversation.'
+        : '');
+
+    const session = this.novaSonicProvider.createSession(systemPrompt, CALL_TOOL_CONFIG);
+    state.novaSonicSession = session;
+
+    // Wire audio output: Nova Sonic PCM 24kHz -> mu-law 8kHz -> Twilio WebSocket
+    session.onAudioOutput((pcm24k: Buffer) => {
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+
+      const mulaw = NovaSonicAudio.novaSonicPCMToMulaw(pcm24k);
+
+      // Send in 160-byte chunks (20ms at 8kHz mu-law)
+      const chunkSize = 160;
+      for (let i = 0; i < mulaw.length; i += chunkSize) {
+        const chunk = mulaw.subarray(i, Math.min(i + chunkSize, mulaw.length));
+        this.sendMediaChunk(state, chunk);
+      }
+    });
+
+    // Wire text output: accumulate user transcripts, log assistant speech
+    session.onTextOutput((text: string, role: string) => {
+      if (role === 'USER') {
+        state.novaSonicTranscript += text;
+        console.error(`[${state.callId}] User (STT): ${text}`);
+      } else {
+        state.novaSonicAssistantText += text;
+        console.error(`[${state.callId}] Assistant: ${text}`);
+      }
+    });
+
+    // Wire turn completion: resolve pending speech wait
+    session.onTurnComplete(() => {
+      console.error(`[${state.callId}] Turn complete (user transcript: ${state.novaSonicTranscript.length > 0 ? 'yes' : 'no'})`);
+      if (state.novaSonicTurnResolve && state.novaSonicTranscript) {
+        const resolve = state.novaSonicTurnResolve;
+        state.novaSonicTurnResolve = null;
+        const transcript = state.novaSonicTranscript;
+        state.novaSonicTranscript = '';
+        state.novaSonicAssistantText = '';
+        resolve(transcript);
+      }
+    });
+
+    // Wire barge-in: clear Twilio-side outbound audio
+    session.onInterruption(() => {
+      console.error(`[${state.callId}] Barge-in — user interrupted`);
+      if (state.ws?.readyState === WebSocket.OPEN && state.streamSid) {
+        state.ws.send(JSON.stringify({
+          event: 'clear',
+          streamSid: state.streamSid,
+        }));
+      }
+    });
+
+    // Wire tool use: execute lab tools and feed results back to Nova Sonic
+    session.onToolUse(async (toolName: string, toolUseId: string, input: any) => {
+      console.error(`[${state.callId}] Tool call: ${toolName}(${JSON.stringify(input)})`);
+      try {
+        const result = await executeTool(toolName, input);
+        console.error(`[${state.callId}] Tool result (${toolName}): ${result.substring(0, 200)}`);
+        session.sendToolResult(toolUseId, result);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[${state.callId}] Tool error (${toolName}): ${errMsg}`);
+        session.sendToolResult(toolUseId, `Error: ${errMsg}`);
+      }
+    });
+
+    // Connect the session (starts the Bedrock bidirectional stream)
+    await session.connect();
+    console.error(`[${state.callId}] Nova Sonic session connected (voice agent with tools)`);
+  }
+
+  /**
+   * Wait for user to finish speaking (Nova Sonic STT mode).
+   * Nova Sonic handles VAD natively; we wait for the turnComplete callback
+   * with accumulated USER role text.
+   */
+  private waitForUserSpeech(state: CallState): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // Reset transcript accumulator for this turn
+      state.novaSonicTranscript = '';
+      state.novaSonicAssistantText = '';
+
+      // Timeout
+      const timeout = setTimeout(() => {
+        state.novaSonicTurnResolve = null;
+        reject(new Error('Nova Sonic turn timeout'));
+      }, this.config.transcriptTimeoutMs);
+
+      // Set the resolve callback (cleared on timeout or turn completion)
+      state.novaSonicTurnResolve = (transcript: string) => {
+        clearTimeout(timeout);
+        clearInterval(hangupCheck);
+        resolve(transcript);
+      };
+
+      // Check for hangup
+      const hangupCheck = setInterval(() => {
+        if (state.hungUp) {
+          clearInterval(hangupCheck);
+          clearTimeout(timeout);
+          state.novaSonicTurnResolve = null;
+          reject(new Error('Call was hung up by user'));
+        }
+      }, 100);
+    });
+  }
+
+  // ===========================================================================
+  // Call lifecycle — public API (dispatches to Nova Sonic or legacy STT+TTS)
+  // ===========================================================================
+
   async initiateCall(message: string): Promise<{ callId: string; response: string }> {
     const callId = `call-${++this.currentCallId}-${Date.now()}`;
-
-    // Create realtime transcription session via provider
-    const sttSession = this.config.providers.stt.createSession();
-    await sttSession.connect();
-    console.error(`[${callId}] STT session connected`);
 
     // Generate secure token for WebSocket authentication
     const wsToken = generateWebSocketToken();
@@ -444,40 +632,104 @@ export class CallManager {
       conversationHistory: [],
       startTime: Date.now(),
       hungUp: false,
-      sttSession,
+      sttSession: null,
+      novaSonicSession: null,
+      novaSonicTranscript: '',
+      novaSonicTurnResolve: null,
+      novaSonicAssistantText: '',
+      claudeBrain: null,
+      conversationLoopRunning: false,
     };
 
     this.activeCalls.set(callId, state);
 
     try {
-      const callControlId = await this.config.providers.phone.initiateCall(
-        this.config.userPhoneNumber,
-        this.config.phoneNumber,
-        `${this.config.publicUrl}/twiml`
-      );
+      if (this.isNovaSonicMode) {
+        // =====================================================================
+        // Nova Sonic voice agent: handles conversation + tools natively.
+        // Claude Code injects messages via sendText, gets back user transcripts.
+        // =====================================================================
+        const callControlId = await this.config.providers.phone.initiateCall(
+          this.config.userPhoneNumber,
+          this.config.phoneNumber,
+          `${this.config.publicUrl}/twiml`
+        );
 
-      state.callControlId = callControlId;
-      this.callControlIdToCallId.set(callControlId, callId);
-      this.wsTokenToCallId.set(wsToken, callId);
+        state.callControlId = callControlId;
+        this.callControlIdToCallId.set(callControlId, callId);
+        this.wsTokenToCallId.set(wsToken, callId);
 
-      console.error(`Call initiated: ${callControlId} -> ${this.config.userPhoneNumber}`);
+        console.error(`[${callId}] Call initiated (Nova Sonic voice agent): ${callControlId}`);
 
-      // Start TTS generation in parallel with waiting for connection
-      // This reduces latency by generating audio while Twilio establishes the stream
-      const ttsPromise = this.generateTTSAudio(message);
+        // Wait for Twilio to connect the media stream
+        await this.waitForConnection(callId, 15000);
 
-      await this.waitForConnection(callId, 15000);
+        // Set up Nova Sonic session with tools + context about why we're calling
+        await this.setupNovaSonicSession(state, message);
+        state.conversationHistory.push({ speaker: 'claude', message });
 
-      // Send the pre-generated audio and listen for response
-      const audioData = await ttsPromise;
-      await this.sendPreGeneratedAudio(state, audioData);
-      const response = await this.listen(state);
-      state.conversationHistory.push({ speaker: 'claude', message });
-      state.conversationHistory.push({ speaker: 'user', message: response });
+        // Wait for user's spoken response
+        const response = await this.waitForUserSpeech(state);
+        state.conversationHistory.push({ speaker: 'user', message: response });
 
-      return { callId, response };
+        return { callId, response };
+
+      } else {
+        // =====================================================================
+        // Claude Brain mode: separate STT + TTS with Claude as conversation brain
+        // =====================================================================
+        const sttSession = this.config.providers.stt.createSession();
+        await sttSession.connect();
+        state.sttSession = sttSession;
+        console.error(`[${callId}] STT session connected`);
+
+        // Create Claude Brain with infrastructure tools
+        state.claudeBrain = new ClaudeBrain({
+          region: this.config.claudeRegion,
+          model: this.config.claudeModel,
+          systemPrompt:
+            'You are Claude, an AI assistant made by Anthropic. You are on a phone call ' +
+            'initiated by Claude Code (an AI coding assistant). ' +
+            'You have tools to check system metrics, run commands, manage Docker containers, ' +
+            'and check service health on configured infrastructure hosts. ' +
+            'Keep responses concise and conversational — this is a voice call, not a chat. ' +
+            'Use your tools proactively when the user asks about infrastructure status.',
+          tools: CALL_TOOL_CONFIG,
+        });
+        console.error(`[${callId}] Claude Brain initialized (model: ${this.config.claudeModel})`);
+
+        const callControlId = await this.config.providers.phone.initiateCall(
+          this.config.userPhoneNumber,
+          this.config.phoneNumber,
+          `${this.config.publicUrl}/twiml`
+        );
+
+        state.callControlId = callControlId;
+        this.callControlIdToCallId.set(callControlId, callId);
+        this.wsTokenToCallId.set(wsToken, callId);
+
+        console.error(`[${callId}] Call initiated (Claude Brain): ${callControlId}`);
+
+        await this.waitForConnection(callId, 15000);
+
+        // Send the opening message through Claude Brain to establish context,
+        // then speak Claude's response (which incorporates the message naturally)
+        const greeting = await this.claudeRespondAndSpeak(state, message);
+        state.conversationHistory.push({ speaker: 'claude', message: greeting });
+
+        // Start the background conversation loop (listen → think → speak → repeat)
+        this.runConversationLoop(state);
+
+        // Wait for first user response
+        const response = await this.listen(state);
+        state.conversationHistory.push({ speaker: 'user', message: response });
+
+        return { callId, response };
+      }
     } catch (error) {
+      state.novaSonicSession?.close();
       state.sttSession?.close();
+      state.conversationLoopRunning = false;
       this.activeCalls.delete(callId);
       throw error;
     }
@@ -487,8 +739,23 @@ export class CallManager {
     const state = this.activeCalls.get(callId);
     if (!state) throw new Error(`No active call: ${callId}`);
 
-    const response = await this.speakAndListen(state, message);
-    state.conversationHistory.push({ speaker: 'claude', message });
+    let response: string;
+
+    if (state.novaSonicSession) {
+      // Send message to Nova Sonic — it will speak it naturally to the user
+      state.novaSonicSession.sendText(message);
+      // Wait for user's spoken response
+      response = await this.waitForUserSpeech(state);
+    } else if (state.claudeBrain) {
+      // Claude Brain mode: inject context from Claude Code, speak response, listen
+      const spokenText = await this.claudeRespondAndSpeak(state, `[Message from Claude Code]: ${message}`);
+      state.conversationHistory.push({ speaker: 'claude', message: spokenText });
+      response = await this.listen(state);
+    } else {
+      // Legacy: speak then listen
+      response = await this.speakAndListen(state, message);
+    }
+
     state.conversationHistory.push({ speaker: 'user', message: response });
 
     return response;
@@ -498,7 +765,16 @@ export class CallManager {
     const state = this.activeCalls.get(callId);
     if (!state) throw new Error(`No active call: ${callId}`);
 
-    await this.speak(state, message);
+    if (state.novaSonicSession) {
+      state.novaSonicSession.sendText(message);
+    } else if (state.claudeBrain) {
+      const spokenText = await this.claudeRespondAndSpeak(state, `[Message from Claude Code]: ${message}`);
+      state.conversationHistory.push({ speaker: 'claude', message: spokenText });
+      return;
+    } else {
+      await this.speak(state, message);
+    }
+
     state.conversationHistory.push({ speaker: 'claude', message });
   }
 
@@ -506,10 +782,18 @@ export class CallManager {
     const state = this.activeCalls.get(callId);
     if (!state) throw new Error(`No active call: ${callId}`);
 
-    await this.speak(state, message);
+    // Stop conversation loop
+    state.conversationLoopRunning = false;
 
-    // Wait for audio to finish playing before hanging up (prevent cutoff)
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (state.novaSonicSession) {
+      state.novaSonicSession.sendText(message);
+      // Wait for TTS to finish before hanging up
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      state.novaSonicSession.close();
+    } else {
+      await this.speak(state, message);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
 
     // Hang up the call via phone provider
     if (state.callControlId) {
@@ -533,6 +817,88 @@ export class CallManager {
     return { durationSeconds };
   }
 
+  // ===========================================================================
+  // Claude Brain: conversation loop + tool calling
+  // ===========================================================================
+
+  /**
+   * Send user text to Claude Brain, execute any tool calls, and speak the final response.
+   * Returns the text that was spoken aloud.
+   */
+  private async claudeRespondAndSpeak(state: CallState, userText: string): Promise<string> {
+    if (!state.claudeBrain) throw new Error('Claude Brain not initialized');
+
+    let response = await state.claudeBrain.respond(userText);
+    console.error(`[${state.callId}] Claude Brain response (stop: ${response.stopReason}): ${response.text.substring(0, 80)}...`);
+
+    // Tool call loop: execute tools and feed results back until Claude is done
+    while (response.stopReason === 'tool_use' && response.toolUse.length > 0) {
+      console.error(`[${state.callId}] Executing ${response.toolUse.length} tool(s)...`);
+
+      const results = await Promise.all(
+        response.toolUse.map(async (tu) => {
+          console.error(`[${state.callId}] Tool: ${tu.name}(${JSON.stringify(tu.input)})`);
+          const result = await executeTool(tu.name!, tu.input as Record<string, any>);
+          console.error(`[${state.callId}] Tool result (${tu.name}): ${result.substring(0, 100)}...`);
+          return { toolUseId: tu.toolUseId!, result };
+        })
+      );
+
+      response = await state.claudeBrain.handleToolResults(response.toolUse, results);
+      console.error(`[${state.callId}] Claude Brain post-tool (stop: ${response.stopReason}): ${response.text.substring(0, 80)}...`);
+    }
+
+    // Speak the final text response
+    if (response.text) {
+      await this.speak(state, response.text);
+    }
+
+    return response.text;
+  }
+
+  /**
+   * Background conversation loop: listen → Claude thinks → speak → repeat.
+   * Runs until the call ends or an error occurs.
+   */
+  private async runConversationLoop(state: CallState): Promise<void> {
+    state.conversationLoopRunning = true;
+    console.error(`[${state.callId}] Conversation loop started`);
+
+    // Small delay to let the greeting finish playing
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    while (state.conversationLoopRunning && !state.hungUp) {
+      try {
+        // Listen for user speech
+        const userText = await this.listen(state);
+        if (!userText || state.hungUp) break;
+
+        console.error(`[${state.callId}] User said: ${userText}`);
+        state.conversationHistory.push({ speaker: 'user', message: userText });
+
+        // Send to Claude Brain and speak the response
+        const response = await this.claudeRespondAndSpeak(state, userText);
+        state.conversationHistory.push({ speaker: 'claude', message: response });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes('hung up') || msg.includes('timeout') || state.hungUp) {
+          console.error(`[${state.callId}] Conversation loop ended: ${msg}`);
+          break;
+        }
+        console.error(`[${state.callId}] Conversation loop error: ${msg}`);
+        // Brief pause before retrying
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    state.conversationLoopRunning = false;
+    console.error(`[${state.callId}] Conversation loop stopped`);
+  }
+
+  // ===========================================================================
+  // Connection + audio helpers
+  // ===========================================================================
+
   private async waitForConnection(callId: string, timeout: number): Promise<void> {
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
@@ -551,20 +917,6 @@ export class CallManager {
   }
 
   /**
-   * Pre-generate TTS audio (can run in parallel with connection setup)
-   * Returns mu-law encoded audio ready to send to Twilio
-   */
-  private async generateTTSAudio(text: string): Promise<Buffer> {
-    console.error(`[TTS] Generating audio for: ${text.substring(0, 50)}...`);
-    const tts = this.config.providers.tts;
-    const pcmData = await tts.synthesize(text);
-    const resampledPcm = this.resample24kTo8k(pcmData);
-    const muLawData = this.pcmToMuLaw(resampledPcm);
-    console.error(`[TTS] Audio generated: ${muLawData.length} bytes`);
-    return muLawData;
-  }
-
-  /**
    * Send a single audio chunk to the phone via WebSocket
    */
   private sendMediaChunk(state: CallState, audioData: Buffer): void {
@@ -577,6 +929,24 @@ export class CallManager {
       message.streamSid = state.streamSid;
     }
     state.ws.send(JSON.stringify(message));
+  }
+
+  // ===========================================================================
+  // Legacy STT+TTS helpers (used when voice backend is NOT nova-sonic)
+  // ===========================================================================
+
+  /**
+   * Pre-generate TTS audio (can run in parallel with connection setup)
+   * Returns mu-law encoded audio ready to send to Twilio
+   */
+  private async generateTTSAudio(text: string): Promise<Buffer> {
+    console.error(`[TTS] Generating audio for: ${text.substring(0, 50)}...`);
+    const tts = this.config.providers.tts;
+    const pcmData = await tts.synthesize(text);
+    const resampledPcm = this.resample24kTo8k(pcmData);
+    const muLawData = this.pcmToMuLaw(resampledPcm);
+    console.error(`[TTS] Audio generated: ${muLawData.length} bytes`);
+    return muLawData;
   }
 
   private async sendPreGeneratedAudio(state: CallState, muLawData: Buffer): Promise<void> {
@@ -626,7 +996,7 @@ export class CallManager {
     // Jitter buffer: accumulate audio before starting playback to smooth out
     // timing variations from network latency and burst delivery patterns
     const JITTER_BUFFER_MS = 100; // Buffer 100ms of audio before starting
-    // 8000 samples/sec ÷ 1000 ms/sec = 8 samples per ms; mu-law is 1 byte per sample
+    // 8000 samples/sec / 1000 ms/sec = 8 samples per ms; mu-law is 1 byte per sample
     const JITTER_BUFFER_SIZE = (8000 / 1000) * JITTER_BUFFER_MS; // 800 bytes at 8kHz mu-law
     let playbackStarted = false;
 
@@ -772,7 +1142,8 @@ export class CallManager {
   }
 
   shutdown(): void {
-    for (const callId of this.activeCalls.keys()) {
+    for (const [callId, state] of this.activeCalls) {
+      state.novaSonicSession?.close();
       this.endCall(callId, 'Goodbye!').catch(console.error);
     }
     this.wss?.close();

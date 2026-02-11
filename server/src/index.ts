@@ -5,39 +5,87 @@
  *
  * A stdio-based MCP server that lets Claude call or text you.
  * Supports voice (Nova Sonic, OpenAI, self-hosted) and SMS via Twilio.
- * Automatically starts ngrok to expose webhooks for phone providers.
+ *
+ * Webhook URL can be provided directly via TTC_WEBHOOK_URL (e.g. API Gateway,
+ * Cloudflare Tunnel, etc.) or auto-tunnelled via ngrok as a fallback.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CallManager, loadServerConfig } from './phone-call.js';
-import { startNgrok, stopNgrok } from './ngrok.js';
 import { TwilioSMSProvider } from './providers/sms-twilio.js';
 import { loadProviderConfig } from './providers/index.js';
+
+/**
+ * Resolve public URLs for Twilio.
+ *
+ * Two URLs are needed:
+ *   - webhookUrl: HTTP endpoint for TwiML webhooks (API Gateway, Cloudflare Tunnel, etc.)
+ *   - wsUrl: WebSocket-capable endpoint for Twilio media streams
+ *
+ * API Gateway HTTP API doesn't support WebSocket upgrade, so when using it
+ * for webhooks we start an ngrok tunnel (outbound from server) for WebSocket.
+ * If TTC_WS_URL is set explicitly, ngrok is not needed.
+ * If neither TTC_WEBHOOK_URL nor TTC_WS_URL is set, ngrok handles both.
+ */
+async function resolveUrls(port: number): Promise<{ webhookUrl: string; wsUrl: string; usingNgrok: boolean }> {
+  const envWebhookUrl = process.env.TTC_WEBHOOK_URL?.replace(/\/+$/, '');
+  const envWsUrl = process.env.TTC_WS_URL?.replace(/\/+$/, '');
+
+  // Case 1: Both URLs provided explicitly — no ngrok needed
+  if (envWebhookUrl && envWsUrl) {
+    console.error(`Webhook URL: ${envWebhookUrl}`);
+    console.error(`WebSocket URL: ${envWsUrl}`);
+    return { webhookUrl: envWebhookUrl, wsUrl: envWsUrl, usingNgrok: false };
+  }
+
+  // Case 2: Only webhook URL (e.g. API Gateway) — need ngrok for WebSocket
+  if (envWebhookUrl && !envWsUrl) {
+    console.error(`Webhook URL: ${envWebhookUrl}`);
+    console.error('Starting ngrok tunnel for WebSocket media streams...');
+    const { startNgrok } = await import('./ngrok.js');
+    const ngrokUrl = await startNgrok(port);
+    console.error(`WebSocket URL (ngrok): ${ngrokUrl}`);
+    return { webhookUrl: envWebhookUrl, wsUrl: ngrokUrl, usingNgrok: true };
+  }
+
+  // Case 3: No webhook URL — ngrok handles everything
+  console.error('No TTC_WEBHOOK_URL set — falling back to ngrok tunnel for all traffic...');
+  const { startNgrok } = await import('./ngrok.js');
+  const ngrokUrl = await startNgrok(port);
+  console.error(`ngrok tunnel (HTTP + WS): ${ngrokUrl}`);
+  return { webhookUrl: ngrokUrl, wsUrl: ngrokUrl, usingNgrok: true };
+}
 
 async function main() {
   // Get port for HTTP server
   const port = parseInt(process.env.TTC_PORT || '3333', 10);
 
-  // Start ngrok tunnel to get public URL
-  console.error('Starting ngrok tunnel...');
-  let publicUrl: string;
+  // Resolve public URLs (webhook + WebSocket)
+  let webhookUrl: string;
+  let wsUrl: string;
+  let usingNgrok = false;
   try {
-    publicUrl = await startNgrok(port);
-    console.error(`ngrok tunnel: ${publicUrl}`);
+    const resolved = await resolveUrls(port);
+    webhookUrl = resolved.webhookUrl;
+    wsUrl = resolved.wsUrl;
+    usingNgrok = resolved.usingNgrok;
   } catch (error) {
-    console.error('Failed to start ngrok:', error instanceof Error ? error.message : error);
+    console.error('Failed to resolve public URLs:', error instanceof Error ? error.message : error);
     process.exit(1);
   }
 
-  // Load server config with the ngrok URL
+  // Load server config with the public URLs
   let serverConfig;
   try {
-    serverConfig = loadServerConfig(publicUrl);
+    serverConfig = loadServerConfig(webhookUrl, wsUrl, usingNgrok);
   } catch (error) {
     console.error('Configuration error:', error instanceof Error ? error.message : error);
-    await stopNgrok();
+    if (usingNgrok) {
+      const { stopNgrok } = await import('./ngrok.js');
+      await stopNgrok();
+    }
     process.exit(1);
   }
 
@@ -212,10 +260,12 @@ async function main() {
   await mcpServer.connect(transport);
 
   const voiceBackend = providerConfig.voiceBackend || 'nova-sonic';
+  const brainMode = voiceBackend !== 'nova-sonic' ? `Claude Brain (${serverConfig.claudeModel})` : 'Nova Sonic (built-in)';
   console.error('');
   console.error('TTC MCP server ready');
   console.error(`Phone: ${serverConfig.phoneNumber} -> ${serverConfig.userPhoneNumber}`);
   console.error(`Voice: ${voiceBackend} | Phone: ${serverConfig.providers.phone.name} | TTS: ${serverConfig.providers.tts.name} | STT: ${serverConfig.providers.stt.name}`);
+  console.error(`Brain: ${brainMode}`);
   if (smsProvider) {
     console.error(`SMS: enabled (same Twilio number)`);
   }
@@ -225,7 +275,10 @@ async function main() {
   const shutdown = async () => {
     console.error('\nShutting down...');
     callManager.shutdown();
-    await stopNgrok();
+    if (usingNgrok) {
+      const { stopNgrok } = await import('./ngrok.js');
+      await stopNgrok();
+    }
     process.exit(0);
   };
 

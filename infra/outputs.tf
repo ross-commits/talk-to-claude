@@ -3,7 +3,7 @@
 ###############################################################################
 
 output "webhook_url" {
-  description = "Public URL for Twilio webhooks (set as TTC_PUBLIC_URL)"
+  description = "Public URL for Twilio webhooks (set as TTC_WEBHOOK_URL)"
   value       = aws_apigatewayv2_api.ttc.api_endpoint
 }
 
@@ -23,6 +23,17 @@ output "nlb_dns" {
 }
 
 output "api_gateway_id" {
-  description = "API Gateway ID"
+  description = "API Gateway HTTP API ID"
   value       = aws_apigatewayv2_api.ttc.id
 }
+
+output "ws_url" {
+  description = "WebSocket URL for Twilio media streams (set as TTC_WS_URL). Only available when enable_alb = true."
+  value       = var.enable_alb ? "https://${aws_lb.ws[0].dns_name}" : null
+}
+
+output "alb_dns" {
+  description = "ALB DNS name (use for CNAME record if using custom domain)"
+  value       = var.enable_alb ? aws_lb.ws[0].dns_name : null
+}
+

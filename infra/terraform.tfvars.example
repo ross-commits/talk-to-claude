@@ -8,3 +8,11 @@ private_subnet_ids = ["subnet-xxxxxxxxxxxxxxxxx", "subnet-xxxxxxxxxxxxxxxxx"]
 # On-prem server running the TTC MCP server (reachable via VPN)
 onprem_server_ip   = "192.168.x.x"
 onprem_server_port = 3333
+
+# --- ALB for WebSocket (optional — replaces ngrok) ---
+# Uncomment to create an internet-facing ALB for Twilio media streams.
+# Requires public subnets with an Internet Gateway and an ACM certificate.
+#
+# enable_alb          = true
+# public_subnet_ids   = ["subnet-xxxxxxxxxxxxxxxxx", "subnet-xxxxxxxxxxxxxxxxx"]
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

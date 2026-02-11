@@ -1,0 +1,30 @@
+# Dependencies (installed inside container)
+node_modules/
+server/node_modules/
+
+# Environment (mounted at runtime, never baked in)
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+
+# Terraform
+infra/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build artifacts
+server/dist/
+coverage/
+
+# Docs (not needed at runtime)
+*.md
+LICENSE
